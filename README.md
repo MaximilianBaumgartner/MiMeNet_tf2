@@ -2,16 +2,18 @@
 MiMeNet predicts the metabolomic profile from microbiome data and learns undelrying relationships between the two.
 
 ### Prerequisites
-* MiMeNet is tested to work on Python 3.7+
+* MiMeNet is tested to work on Python 3.9+
 * MiMeNet requires the following Python libraries:
-  - Tensorflow 1.14
-  - Numpy 1.17.2
-  - Pandas 0.25.1
-  - Scipy 1.3.1
-  - Scikit-learn 0.21.3
-  - Scikit-bio 0.5.2
-  - Matplotlib 3.0.3
-  - Seaborn 0.9.0
+  - Tensorflow[and-cuda] 2.19.0
+  - Numpy 2.0.2
+  - Pandas 2.3.1
+  - Scipy 1.13.1
+  - Scikit-learn 1.6.1
+  - Scikit-bio 0.6.3
+  - Matplotlib 3.9.4
+  - Seaborn 0.13.2
+  - Optuna 4.4.0
+  - Scikeras 0.13.0
   
 
 ### Usage

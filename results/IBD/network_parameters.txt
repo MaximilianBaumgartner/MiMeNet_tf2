@@ -1,1 +1,1 @@
-{"num_layer": 1, "lr": 0.001, "layer_nodes": 512, "l2": 0.001, "l1": 0, "dropout": 0.5}
+{"num_layer": 2, "layer_nodes": 128, "l1": 0.0, "l2": 0.0014020949251545526, "dropout": 0.16943231782000406, "lr": 0.001, "batch_size": 64}

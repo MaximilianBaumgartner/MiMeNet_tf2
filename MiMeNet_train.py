@@ -24,6 +24,7 @@ from scipy.cluster.hierarchy import cut_tree
 
 from src.models.MiMeNet import MiMeNet, tune_MiMeNet
 
+import traceback
 
 ###################################################
 # Read in command line arguments
@@ -75,6 +76,11 @@ gen_background = True
 if background_dir != None:
     gen_background = False
 
+##MB enable memory growth
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+##
 
 start_time = time.time()
 
@@ -93,6 +99,7 @@ if net_params != None:
             l2 = params["l2"]
             dropout = params["dropout"]
             learning_rate = params["lr"]
+            batch_size=params['batch_size']
             tuned = True
             print("Loaded network parameters...")
     except:
@@ -277,8 +284,7 @@ if external_micro:
 if external_metab:
     external_metab_comp_df = external_metab_comp_df.transpose()
     
-    
-    
+
 ###################################################
 # Run Cross-Validation on Dataset
 ###################################################
@@ -290,6 +296,7 @@ tune_run_time = 0
 
 micro = micro_comp_df.values
 metab = metab_comp_df.values
+
 
 dirName = 'results/' + out + '/CV' 
 try:
@@ -353,11 +360,11 @@ for run in range(0,num_run_cv):
         train_metab = metab_scaler.transform(train_metab)
         test_metab = metab_scaler.transform(test_metab)            
 
-        # Aggregate paired microbiome and metabolomic data
         train = (train_micro, train_metab)
         test = (test_micro, test_metab)
 
         # Tune hyperparameters if first partition
+        ## added batch size as parameter
         if tuned == False:
             tune_start_time = time.time()
             print("Tuning parameters...")
@@ -368,6 +375,7 @@ for run in range(0,num_run_cv):
             num_layer=params['num_layer']
             layer_nodes=params['layer_nodes']
             dropout=params['dropout']
+            batch_size=params['batch_size']
             with open('results/' +out + '/network_parameters.txt', 'w') as outfile:
                 json.dump(params, outfile)
                         
@@ -378,14 +386,14 @@ for run in range(0,num_run_cv):
                 
         # Construct Neural Network Model
         model = MiMeNet(train_micro.shape[1], train_metab.shape[1], l1=l1, l2=l2, 
-                            num_layer=num_layer, layer_nodes=layer_nodes, dropout=dropout)
+                            num_layer=num_layer, layer_nodes=layer_nodes, dropout=dropout,batch_size=batch_size)
 
         #Train Neural Network Model
-        model.train(train)
+        #print(train_micro.shape, test_micro.shape)
+        model.train((train_micro, train_metab))
                 
         # Predict on test set
-        p = model.test(test)
-
+        p = model.test((test_micro, test_metab))
         inv_p = metab_scaler.inverse_transform(p)
                 
         if metab_norm == "RA" or metab_norm == None:
@@ -398,7 +406,6 @@ for run in range(0,num_run_cv):
 
         prediction_df.to_csv(dirName + "/prediction.csv")
         score_matrix_df.to_csv(dirName + "/score_matrix.csv")
-
         model.destroy()
         tf.keras.backend.clear_session()
 
@@ -505,10 +512,10 @@ if gen_background == True:
             test = (test_micro, test_metab)
 
             model = MiMeNet(train_micro.shape[1], train_metab.shape[1], l1=l1, l2=l2, 
-                            num_layer=num_layer, layer_nodes=layer_nodes, dropout=dropout)
+                            num_layer=num_layer, layer_nodes=layer_nodes, dropout=dropout,batch_size=batch_size)
 
-            model.train(train)
-            p = model.test(test)
+            model.train((train_micro, train_metab))
+            p = model.test((test_micro, test_metab))
 
             preds = list(preds) + list(p)
             truth = list(truth) + list(test_metab)
@@ -853,53 +860,125 @@ microbe_cluster_df.to_csv("results/" + out +"/microbe_clusters.csv")
 
 ###################################################
 # Determine Microbial Module Enrichment
+## added debuging and fix for mann whitney test when n<2
+## fixed 2D array error in labels_df.values
 ################################################### 
 
 if labels != None:
     try:
-        labels_df=pd.read_csv(labels, index_col=0)
-        label_set = np.unique(labels_df.values)
-        g0 = samples[(labels_df.values==label_set[0]).reshape(-1)]
-        g1 = samples[(labels_df.values==label_set[1]).reshape(-1)]
+        labels_df = pd.read_csv(labels, index_col=0)
+        labels_array = labels_df.values.flatten()
+        label_set = np.unique(labels_array)
 
-        micro_sub = micro_comp_df
+        print("Labels loaded. Unique classes:", label_set)
+        assert len(label_set) == 2, f"Expected exactly 2 classes, got {len(label_set)}: {label_set}"
+
+        # Ensure sample names match
+        assert all(sample in labels_df.index for sample in samples), "Some samples not found in labels_df"
+        assert all(label in samples for label in labels_df.index), "Some labels don't match any sample"
+
+
+        g0 = samples[(labels_array == label_set[0])]
+        g1 = samples[(labels_array == label_set[1])]
+
+        # Confirm g0 and g1 are in the data
+        print("g0 samples:", g0[:5])
+        print("g1 samples:", g1[:5])
+
+        micro_sub = micro_comp_df.copy()
+        print("micro_sub index example:", micro_sub.index[:5])
+
+        # Ensure sample index matches labels
+        assert all(sample in micro_sub.index for sample in g0), "Some g0 samples missing in micro_sub"
+        assert all(sample in micro_sub.index for sample in g1), "Some g1 samples missing in micro_sub"  
+        
+
         enriched_in = []
         p_list = []
 
         micro_comp_cluster_df = pd.DataFrame(index=samples)
 
-        micro_sub = pd.DataFrame(index=micro_sub.index, columns=micro_sub.columns,
-                                 data = micro_sub)
-
 
         for mc in range(num_microbiome_clusters):
-            g0_cluster = micro_sub.loc[g0, microbe_cluster_df["Cluster"]==mc].mean(1).values
-            g1_cluster =  micro_sub.loc[g1, microbe_cluster_df["Cluster"]==mc].mean(1).values
-            micro_comp_cluster_df["Module " + str(mc + 1)] = micro_sub.loc[:,microbe_cluster_df["Cluster"]==mc].mean(1).values
-            p_value = mannwhitneyu(g0_cluster, g1_cluster)[1]
+            print(f"--- Microbiome Cluster {mc+1} ---")
+            print("micro_sub.columns[:5]:", micro_sub.columns[:5])
+            print("microbe_cluster_df.index[:5]:", microbe_cluster_df.index[:5])
+
+            # Check if all features in metabolite_cluster_df exist in metab_sub
+            missing_features = set(microbe_cluster_df.index) - set(micro_sub.columns)
+            print("Missing features from micro_sub:", missing_features)
+
+            features_in_cluster = microbe_cluster_df.index[microbe_cluster_df["Cluster"] == mc].tolist()
+            if len(features_in_cluster) == 0:
+                print(f"Skipping Microbial Module {mc+1}: no features assigned.")
+                enriched_in.append("None")
+                p_list.append(1.0)
+                continue
+
+            try:
+                g0_cluster = micro_sub.loc[g0, features_in_cluster].mean(1).values
+                g1_cluster =  micro_sub.loc[g1, features_in_cluster].mean(1).values
+                print(f"Cluster {mc+1}: g0_cluster size = {len(g0_cluster)}, g1_cluster size = {len(g1_cluster)}")
+
+            except KeyError as e:
+                print(f"KeyError in cluster {mc+1}: {e}")
+                enriched_in.append("None")
+                p_list.append(1.0)
+                continue
+            
+            if np.any(np.isnan(g0_cluster)) or np.any(np.isnan(g1_cluster)):
+                print(f"NaNs in module {mc+1} data, skipping")
+                enriched_in.append("None")
+                p_list.append(1.0)
+                continue
+
+
+            if len(g0_cluster) < 2 or len(g1_cluster) < 2:
+                print(f"Skipping Module {mc+1}: insufficient data in g0 ({len(g0_cluster)}) or g1 ({len(g1_cluster)})")
+                enriched_in.append("None")
+                p_list.append(1.0)
+                continue
+
+            micro_comp_cluster_df["Module " + str(mc + 1)] = micro_sub[features_in_cluster].mean(1).values
+            stat, p_value = mannwhitneyu(g0_cluster, g1_cluster, alternative="two-sided")
             p_list.append(p_value)
             if p_value < 0.05:
-                p_value_one_sided = mannwhitneyu(g0_cluster, g1_cluster, alternative="greater")[1]
+                _, p_value_one_sided = mannwhitneyu(g0_cluster, g1_cluster, alternative="greater")
                 if p_value_one_sided < 0.05:
-                    enriched_in.append(labels[0])
+                    enriched_in.append(label_set[0])
                 else:
-                    enriched_in.append(labels[1])
+                    enriched_in.append(label_set[1])
             else:
                 enriched_in.append("None")
 
         micro_cluster_enrichment_df = pd.DataFrame(index=["Microbial Module " + str(x+1) for x in range(num_microbiome_clusters)])
         micro_cluster_enrichment_df["p-value"] = p_list
         micro_cluster_enrichment_df["Enriched"] = enriched_in
-        micro_comp_cluster_df["Diagnosis"] = labels_df.values
-        micro_cluster_enrichment_df.to_csv("results/" + out + "/microbiome_module_enrichment.csv")
+        micro_comp_cluster_df["Diagnosis"] = labels_df.values.flatten()
 
-        micro_box_df = pd.melt(micro_comp_cluster_df, id_vars= ["Diagnosis"], value_vars=micro_comp_cluster_df.columns[0:num_microbiome_clusters])
-        plt.figure(figsize=(8,8), dpi=300)
-        sns.boxplot(data=micro_box_df, x="variable", y="value", hue="Diagnosis")
-        plt.xlabel("Microbiome Module")
-        plt.ylabel("Mean Module Abundance")
-        plt.title("Microbiome Module by Label")
-        plt.savefig("results/" + out + "/Images/micro_module_enrichment.png")
+        try:
+            output_dir = "results/" + out + "/"
+            os.makedirs(output_dir, exist_ok=True)
+            micro_cluster_enrichment_df.to_csv(output_dir + "microbiome_module_enrichment.csv")
+        except Exception:
+            print("Failed to save enrichment CSV")
+            traceback.print_exc()
+        try:
+            micro_box_df = pd.melt(micro_comp_cluster_df, id_vars= ["Diagnosis"], value_vars=micro_comp_cluster_df.columns[0:num_microbiome_clusters])
+            plt.figure(figsize=(8,8), dpi=300)
+            sns.boxplot(data=micro_box_df, x="variable", y="value", hue="Diagnosis")
+            plt.xlabel("Microbiome Module")
+            plt.ylabel("Mean Module Abundance")
+            plt.title("Microbiome Module by Label")
+
+            image_dir = os.path.join("results", out, "Images")
+            os.makedirs(image_dir, exist_ok=True)
+            plt.savefig(os.path.join(image_dir, "micro_module_enrichment.png"))
+            plt.close()
+        except Exception:
+            print("Failed to create or save the enrichment boxplot.")
+            traceback.print_exc()
+
 
 
         ###################################################
@@ -918,17 +997,32 @@ if labels != None:
 
 
         for mc in range(num_metabolite_clusters):
+            features_in_cluster = metabolite_cluster_df["Cluster"] == mc
+            if features_in_cluster.sum() == 0:
+                print(f"Skipping Metabolite Module {mc+1}: no features assigned.")
+                enriched_in.append("None")
+                p_list.append(1.0)
+                continue
+
             g0_cluster = metab_sub.loc[g0, metabolite_cluster_df["Cluster"]==mc].mean(1).values
             g1_cluster =  metab_sub.loc[g1, metabolite_cluster_df["Cluster"]==mc].mean(1).values
+ 
+            if len(g0_cluster) < 2 or len(g1_cluster) < 2:
+                print(f"Skipping Module {mc+1}: insufficient data in g0 ({len(g0_cluster)}) or g1 ({len(g1_cluster)})")
+                enriched_in.append("None")
+                p_list.append(1.0)
+                continue           
+
+
             metab_comp_cluster_df["Module " + str(mc + 1)] = metab_sub.loc[:,metabolite_cluster_df["Cluster"]==mc].mean(1).values
-            p_value = mannwhitneyu(g0_cluster, g1_cluster)[1]
+            stat, p_value = mannwhitneyu(g0_cluster, g1_cluster, alternative="two-sided")
             p_list.append(p_value)
             if p_value < 0.05:
-                p_value_one_sided = mannwhitneyu(g0_cluster, g1_cluster, alternative="greater")[1]
+                _, p_value_one_sided = mannwhitneyu(g0_cluster, g1_cluster, alternative="greater")
                 if p_value_one_sided < 0.05:
-                    enriched_in.append(labels[0])
+                    enriched_in.append(label_set[0])
                 else:
-                    enriched_in.append(labels[1])
+                    enriched_in.append(label_set[1])
             else:
                 enriched_in.append("None")
 
@@ -936,7 +1030,7 @@ if labels != None:
         metab_cluster_enrichment_df = pd.DataFrame(index=["Metabolite Module " + str(x+1) for x in range(num_metabolite_clusters)])
         metab_cluster_enrichment_df["p-value"] = p_list
         metab_cluster_enrichment_df["Enriched"] = enriched_in
-        metab_comp_cluster_df["Diagnosis"] = labels_df.values
+        metab_comp_cluster_df["Diagnosis"] = labels_df.values.flatten()
         metab_cluster_enrichment_df.to_csv("results/" + out + "/metabolite_cluster_enrichment.csv")
 
         metab_box_df = pd.melt(metab_comp_cluster_df, id_vars= ["Diagnosis"], value_vars=metab_comp_cluster_df.columns[0:num_metabolite_clusters])
@@ -946,8 +1040,12 @@ if labels != None:
         plt.ylabel("Mean Module Abundance")
         plt.title("Metabolite Module by Label")
         plt.savefig("results/" + out + "/Images/metab_module_enrichment.png")
-    except:
+
+    except Exception as e:
         print("Warning! Could not open label file and perform module enrichment!")
+        traceback.print_exc()
+
+
         
 ###################################################
 # Train Ensemble of Neural Networks on Full Dataset
@@ -998,10 +1096,10 @@ for run in range(0,num_run):
                 
     # Construct Neural Network Model
     model = MiMeNet(train_micro.shape[1], train_metab.shape[1], l1=l1, l2=l2, 
-                        num_layer=num_layer, layer_nodes=layer_nodes, dropout=dropout)
+                        num_layer=num_layer, layer_nodes=layer_nodes, dropout=dropout,batch_size=batch_size)
 
     #Train Neural Network Model
-    model.train(train)
+    model.train((train_micro, train_metab))
           
     score_matrix_df = pd.DataFrame(data=model.get_scores(), index=micro_comp_df.columns, 
                                    columns=metab_comp_df.columns)
@@ -1049,7 +1147,23 @@ for run in range(0,num_run):
     
     microbe_cluster_matrix_list.append(micro_cluster_matrix)
     metabolite_cluster_matrix_list.append(metab_cluster_matrix)  
-    model.model.save(dirName + "/network_model.h5")
+    model.model.save(dirName + "/network_model.keras")
+
+    #create prediction.csv for plotting of external data correlation
+    if external_micro != None:
+        test_micro = external_micro_comp_df
+        test_metab = external_metab_comp_df
+        # Scale data before neural network training
+        test_micro = micro_scaler.transform(test_micro)       
+        test_metab = metab_scaler.transform(test_metab) 
+        # Predict on test set
+        p = model.test((test_micro, test_metab))
+        inv_p = metab_scaler.inverse_transform(p)
+        if metab_norm == "RA" or metab_norm == None:
+            inv_p = np.exp(inv_p) - 1
+            inv_p = inv_p/np.sum(inv_p)
+        prediction_df = pd.DataFrame(data=inv_p, index=external_samples, columns=metab_comp_df.columns)
+        prediction_df.to_csv(dirName + "/prediction.csv")
 
     model.destroy()
     tf.keras.backend.clear_session()
@@ -1066,8 +1180,8 @@ for r in range(num_run):
     
 print("Selecting Full Model %d with consensus %.2f" % (np.argmax(consensus_list), np.max(consensus_list)))
 
-final_model = tf.keras.models.load_model("results/" + out + "/Full/" + str(np.argmax(consensus_list)) + "/network_model.h5")
-final_model.save("results/" + out + "/final_network_model.h5")
+final_model = tf.keras.models.load_model("results/" + out + "/Full/" + str(np.argmax(consensus_list)) + "/network_model.keras")
+final_model.save("results/" + out + "/final_network_model.keras")
 
 if external_micro != None:
     test_micro = external_micro_comp_df
@@ -1078,20 +1192,51 @@ if external_micro != None:
     test_micro = micro_scaler.transform(test_micro)
     pred = final_model.predict(test_micro)
     inv_pred = metab_scaler.inverse_transform(pred)
+
     if metab_norm == "RA" or metab_norm == None:
         inv_pred = np.exp(inv_pred) - 1
         inv_pred = inv_pred/np.sum(inv_pred)
-        
+    
     external_pred_df = pd.DataFrame(data = inv_pred, index=external_samples, columns=metab_comp_df.columns)
     external_pred_df.to_csv("results/" + out + "/external_predictions.csv")
     
 if external_metab != None:
     external_corr = external_metab_comp_df.corrwith(external_pred_df, method="spearman")
+
     print("External mean correlation %.2f" % (np.mean(external_corr)))
     print("%d of %d metabolites are significantly correlated in external evaluation" % (sum(external_corr.values > cutoff_rho),
                                                                                         len(correlation_cv_df.values)))  
-       
-    external_sig_metabolites = annotated_metabolites[external_corr.loc[annotated_metabolites].values > cutoff_rho]
+
+
+
+## create external correlation figures as per jupyter notebook
+correlation_external_df = pd.DataFrame(index=metab_comp_df.columns)
+
+
+if external_micro != None:
+    for run in range(num_run):
+        preds = pd.read_csv("results/" + out + "/Full/" + str(run) +  "/prediction.csv", sep=",", index_col=0)
+        y = external_metab_comp_df
+        cor = y.corrwith(preds, method="spearman")
+        correlation_external_df["Run_"+str(run)] = cor.loc[correlation_external_df.index]
     
+    correlation_external_df["Mean"] = correlation_external_df.mean(axis=1)
+    correlation_external_df = correlation_external_df.sort_values("Mean", ascending=False)
+    correlation_external_df.to_csv("results/" + out + "/Full/" + "/external_correlations.tsv")
+    fig = plt.figure(figsize=(8,8), dpi=300)
+    ax = fig.add_subplot(111)
+    sns.distplot(correlation_external_df["Mean"], bins=20)
+    sns.distplot(bg_corr, label="Background")
+    plt.axvline(x=cutoff_rho, color="red", lw=2, label="95% Cutoff")
+    plt.axvspan(cutoff_rho, 1.0, alpha=0.2, color='gray')
+    plt.xlim(-1,1)
+    plt.title("External IBD Prediction Correlation")
+    plt.ylabel("Frequency")
+    plt.xlabel("Spearman Correlation")
+    plt.text(0.1, 0.9,"Mean: %.3f"%correlation_external_df["Mean"].mean(),horizontalalignment='center',verticalalignment='center',transform = ax.transAxes)
+    plt.savefig("results/" + out + "/Full/" + "/external_correlations.png")
+    plt.show()
+
+    external_sig_metabolites = annotated_metabolites[external_corr.loc[annotated_metabolites].values > cutoff_rho]
     print("%d of %d annotated metabolites are significantly correlated in the external evaluation" % (len(external_sig_metabolites),
                                                                                                       len(annotated_metabolites)))

@@ -1,7 +1,9 @@
 ## Fork of MiMeNet for bile acid prediction from microbial bile acid converting enzymes
 
 MiMeNet predicts the metabolomic profile from microbiome data and learns undelrying relationships between the two.
-This fork has been adapted to run on H100-GPU and includes all input and output data for our upcoming bile acid manuscript.
+This fork has been adapted to run on H100-GPU and includes all input and output data for our upcoming bile acid manuscript. 
+
+final_network_model.keras can be used to predict a bile acid table from microbial bile acid converting enzymes derived from our shortBRED database
 
 ### Prerequisites
 * MiMeNet is tested to work on Python 3.9+

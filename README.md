@@ -1,18 +1,21 @@
-## MiMeNet: Exploring Microbiome-Metabolome Relationships using Neural Networks
+## Fork of MiMeNet for bile acid prediction from microbial bile acid converting enzymes
+
 MiMeNet predicts the metabolomic profile from microbiome data and learns undelrying relationships between the two.
+This fork has been adapted to run on H100-GPU and includes all input and output data for our upcoming bile acid manuscript.
 
 ### Prerequisites
-* MiMeNet is tested to work on Python 3.7+
+* MiMeNet is tested to work on Python 3.9+
 * MiMeNet requires the following Python libraries:
-  - Tensorflow 1.14
-  - Numpy 1.17.2
-  - Pandas 0.25.1
-  - Scipy 1.3.1
-  - Scikit-learn 0.21.3
-  - Scikit-bio 0.5.2
-  - Matplotlib 3.0.3
-  - Seaborn 0.9.0
-  
+  - Tensorflow[and-cuda] 2.19.0
+  - Numpy 2.0.2
+  - Pandas 2.3.1
+  - Scipy 1.13.1
+  - Scikit-learn 1.6.1
+  - Scikit-bio 0.6.3
+  - Matplotlib 3.9.4
+  - Seaborn 0.13.2
+  - Optuna 4.4.0
+  - Scikeras 0.13.0
 
 ### Usage
 
@@ -66,23 +69,6 @@ usage: MiMeNet_train.py [-h] -micro MICRO -metab METAB
 |num_run_cv| Parameter to specify how many iterations of cross-validated evaluation to perform.|
 |num_cv| Number of partitions to divide the data into during cross-validation (Recommend at least 5).|
 
-### Example for provided dataset
-
-```bash
-python MiMeNet_train.py -micro data/IBD/microbiome_PRISM.csv -metab data/IBD/metabolome_PRISM.csv \
-                        -external_micro data/IBD/microbiome_external.csv -external_metab data/IBD/metabolome_external.csv \
-                        -micro_norm None -metab_norm CLR -net_params results/IBD/network_parameters.txt \
-                        -annotation data/IBD/metabolome_annotation.csv -labels data/IBD/diagnosis_PRISM.csv \
-                        -num_run_cv 10 -output IBD
-```
-
-The provided command will run MiMeNet on the IBD dataset and store results in the directory _results/output_dir_. 
-
-### Version
-1.0.0 (2020/07/28)
-
-### Publication
-TBA
 
 ### MiMeNet Workflow
 
@@ -98,8 +84,6 @@ MiMeNet generates a background of SCC values using a similar approach as in _Cro
 #### Constructing Microbe and Metabolite Modules
 Using the set of models trained during the _Cross-Validated Evaluation_, MiMeNet constructs a microbe-metabolite interaction-score matrix. This interaction score matrix is biclustered into microbe and metabolite modules, grouping sets of microbes and metabolites with similar interaction patterns. These groupings may help illuminate the functions and structure of unannotated metabolites based on annotated members of the module.
 
-### Contact
-* Please contact Derek Reiman <dreima2@uic.edu> or Yand Dai <yangdai@uic.edu> for any questions or comments.
 
 ### License
 Software provided to academic users under MIT License

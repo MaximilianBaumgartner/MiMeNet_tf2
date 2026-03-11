@@ -22,7 +22,7 @@ final_network_model.keras can be used to predict a bile acid table from microbia
 ### Usage
 
 ```bash
-usage: MiMeNet_train.py [-h] -micro MICRO -metab METAB
+usage: MiMeNet_train_2.py [-h] -micro MICRO -metab METAB
                         [-external_micro EXTERNAL_MICRO]
                         [-external_metab EXTERNAL_METAB]
                         [-annotation ANNOTATION] [-labels LABELS] -output
